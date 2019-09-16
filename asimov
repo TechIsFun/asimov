@@ -12,7 +12,7 @@
 #
 # For a full explanation, please see https://apple.stackexchange.com/a/25833/206772
 #
-# @version 0.2.0
+# @version 0.2.1
 # @author  Steve Grunwell
 # @license MIT
 
@@ -20,6 +20,13 @@ readonly FILEPATHS=(
     "vendor ../composer.json"
     "node_modules ../package.json"
     ".vagrant ../Vagrantfile"
+    "bower_components ../bower.json"
+    "target ../pom.xml"
+    ".stack-work ../stack.yaml"
+    "Carthage ../Cartfile"
+    "Pods ../Podfile"
+    ".build ../Package.swift"
+    "build ../build.gradle"
 )
 
 # Given a directory path, determine if the corresponding file (relative
@@ -28,22 +35,15 @@ readonly FILEPATHS=(
 # For example, when looking at a /vendor directory, we may choose to
 # ensure a composer.json file is available.
 dependency_file_exists() {
-    filename=$1
-
     read -r path;
 
     while read -r path; do
-
-        # Return early if this is a nested dependency (e.g. node_modules
-        # inside another node_modules directory.
-        if [[ $(dirname "$path") == *"/$(basename "$path")/"* ]]; then
-            continue;
-        fi
-
-        if [ -f "${path}/${filename}" ]; then
+        safe_filepath_suffix=$(md5 -qs "$(basename "$path")")
+        filename="filepath_${safe_filepath_suffix}"
+        if [ -f "${path}/${!filename}" ]; then
             echo "$path"
         fi
-  done
+    done
 }
 
 # Exclude the given path from Time Machine backups.
@@ -56,16 +56,35 @@ exclude_file() {
 
         tmutil addexclusion "$path"
 
-        echo "- ${path} has been excluded from Time Machine backups."
+        sizeondisk=$(du -hs "$path" | cut -f1)
+        echo "- ${path} has been excluded from Time Machine backups ($sizeondisk)."
   done
 }
 
+# Start to construct the `find` parameter arguments, based on a home directory search
+# but excluding ~/Library
+find_parameters=(~ -not \( -path ~/Library -prune \))
+
 # Iterate over dependencies.
+n=0
 for i in "${FILEPATHS[@]}"; do
     read -ra parts <<< "$i"
 
-    printf "\\n\\033[0;36mFinding %s/ directories with corresponding %s files...\\033[0m\\n" \
-        "${parts[0]}" "${parts[1]}"
+    # Add this folder to the `find` list, allowing a single `find` command to find all
+    if [ "$n" -gt "0" ]; then
+        find_parameters+=(-o)
+    fi
+    find_parameters+=(-name "${parts[0]}" -type d -prune)
 
-    find ~ -name "${parts[0]}" -type d | dependency_file_exists "${parts[1]}" | exclude_file
+    # Set up a variable for lookup in dependency_file_exists, using a hashed name
+    # to ensure the variable name is valid
+    safe_filepath="filepath_$(md5 -qs "${parts[0]}")"
+    declare "$safe_filepath"="${parts[1]}"
+
+    ((n++))
 done
+
+
+echo -e "\\n\\033[0;36mFinding dependency directories with corresponding definition files...\\033[0m\\n"
+
+find "${find_parameters[@]}" | dependency_file_exists | exclude_file
